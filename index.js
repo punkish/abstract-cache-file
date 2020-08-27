@@ -18,8 +18,6 @@ start([callback]) (optional): clients that require extra initialization, e.g. to
 stop([callback]) (optional): required when start() is present. This should shutdown any connections/processes started via start(). It is left to the user to invoke this method in their shutdown procedure. This method may be an async function at the discretion of the implementor.
 */
 
-const Redis = require('ioredis')
-
 /*
 In all cases where a key is required, the key may be a simple string, or it may be an object of the format {id: 'name', segment: 'name'}. It is up to the implementing strategy to decide how to handle these keys.
 */
@@ -37,12 +35,45 @@ function mapKey (inputKey, segment) {
     return parts.join(':')
 }
 
+function exists(dir) {
+    try {
+        fs.accessSync(dir)
+    } 
+    catch(err) {
+        return false
+    }
+
+    return true
+}
+
+function safeCb(cb) {
+    if (typeof cb === 'function') return cb
+    return function(){}
+}
+
 const proto = {
 
-    /*
-    delete(key[, callback]): removes the specified item from the cache.
-    */
-    delete: function (key) {
+    // buildFilePath() and buildCacheEnry() are required by abstract-file-cache
+    buildFilePath: function (key) {
+        const _key = mapKey(key, this._segment)
+        return path.normalize(cacheDir + '/' + _key + '.json')
+    },
+
+    buildCacheEntry: function (data) {
+        return {
+            cacheUntil: !cacheInfinitely ? new Date().getTime() + cacheDuration : undefined,
+            data: data
+        }
+    },
+
+    // The following are required by abstract-cache
+
+    // `await` is set to false because abstract-cache-file uses callbacks
+    // instead of async/await
+    await: false,
+
+    // delete(key[, callback]): removes the specified item from the cache
+    delete: function (key, cb) {
         const _key = mapKey(key, this._segment)
         if(ram) {
             delete memoryCache[_key];
@@ -55,17 +86,14 @@ const proto = {
         fs.unlink(buildFilePath(_key), cb);
     },
 
-    disconnect: function () {
-        //return this._redis.disconnect()
-    },
-
-    /*
-    get(key[, callback]): retrieves the desired item from the cache. The returned item should be a deep copy of the stored value to prevent alterations from affecting the cache. The result should be an object with the properties:
-        item: the item the user cached.
-        stored: a Date, in Epoch milliseconds, indicating when the item was stored.
-        ttl: the remaining lifetime of the item in the cache (milliseconds).
-    */
-    get: function (key) {
+    // get(key[, callback]): retrieves the desired item from the cache. 
+    // The returned item should be a deep copy of the stored value to 
+    // prevent alterations from affecting the cache. The result should 
+    // be an object with the properties:
+    //    item: the item the user cached.
+    //    stored: a Date, in Epoch milliseconds, indicating when the item was stored.
+    //    ttl: the remaining lifetime of the item in the cache (milliseconds).
+    get: function (key, cb) {
         const _key = mapKey(key, this._segment)
 
         // return this._redis.get(_key)
@@ -107,13 +135,12 @@ const proto = {
 
     },
 
-    /*
-    has(key[, callback]): returns a boolean result indicating if the cache contains the desired key.
-    */
+    // has(key[, callback]): returns a boolean result indicating if the 
+    // cache contains the desired key.
 
     // cribbed has from
     // https://github.com/chungkitchan/persistent-cache/blob/master/index.js#L170
-    has: function (key) {
+    has: function (key, cb) {
         const _key = mapKey(key, this._segment)
         //return this._redis.exists(_key).then((result) => Boolean(result))
 
@@ -124,33 +151,9 @@ const proto = {
         return fs.existsSync(buildFilePath(_key));
     },
 
-    keys: function (cb) {
-        //const _key = mapKey(pattern, this._segment)
-        // return this._redis.keys(_key)
-        // .then((result) => {
-        //     const res = result.map(e => e.split(':')[1])
-        //     return Promise.resolve(res)
-        // })
-
-        cb = safeCb(cb);
-
-        if(ram && !persist)
-            return cb(null, Object.keys(memoryCache));
-
-        fs.readdir(cacheDir, function (err, files) {
-            return !!err ? cb(err) : cb(err, files.map(f => { return f.slice(0, -5) })
-            )
-        })
-    },
-
-    quit: function () {
-        //return this._redis.quit()
-    },
-
-    /*
-    set(key, value, ttl[, callback]): stores the specified value in the cache under the specified key for the time ttl in milliseconds.
-    */
-    put: function (key, value, ttl) {
+    // set(key, value, ttl[, callback]): stores the specified value in 
+    // the cache under the specified key for the time ttl in milliseconds.
+    set: function (key, value, ttl, cb) {
         const _key = mapKey(key, this._segment)
         const payload = {
             item: value,
@@ -179,6 +182,27 @@ const proto = {
         //         const ttlSec = Math.max(1, Math.floor(ttl / 1000))
         //         return this._redis.expire(_key, ttlSec)
         //     })
+    },
+
+    // the following is optional from the point of abstract-cache
+    // but is provided as inherited from persistent-cache
+    keys: function (cb) {
+        //const _key = mapKey(pattern, this._segment)
+        // return this._redis.keys(_key)
+        // .then((result) => {
+        //     const res = result.map(e => e.split(':')[1])
+        //     return Promise.resolve(res)
+        // })
+
+        cb = safeCb(cb);
+
+        if(ram && !persist)
+            return cb(null, Object.keys(memoryCache));
+
+        fs.readdir(cacheDir, function (err, files) {
+            return !!err ? cb(err) : cb(err, files.map(f => { return f.slice(0, -5) })
+            )
+        })
     }
 }
 
@@ -203,16 +227,21 @@ module.exports = function abstractCacheFileFactory (config) {
     const client = _config.client
     const segment = _config.segment || 'abstractCacheFile'
 
+    let memoryCache
+    if (ram) {
+        memoryCache = {}
+    }
+
+    if(persist && !exists(cacheDir)) {
+        mkdirp.sync(cacheDir)
+    }
+
     const instance = Object.create(proto)
     
     Object.defineProperties(instance, {
         await: {
             enumerable: false,
-            value: true
-        },
-        _redis: {
-            enumerable: false,
-            value: client
+            value: false
         },
         _segment: {
             enumerable: false,
