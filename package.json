@@ -1,0 +1,23 @@
+{
+  "name": "abstract-cache-file",
+  "version": "1.0.0",
+  "description": "file adapter for abstract-cache, based on persistent-cache",
+  "main": "index.js",
+  "repository": "LionC/persistent-cache",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "cache",
+    "persistent",
+    "data",
+    "storage",
+    "store"
+  ],
+  "author": "Puneet Kishor",
+  "license": "CC0-1.0",
+  "dependencies": {
+    "mkdirp-no-bin": "^0.5.1",
+    "rmdir": "git@github.com:punkish/node.rmdir.git"
+  }
+}
